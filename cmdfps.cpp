@@ -1,7 +1,14 @@
 #include <iostream>
 #include <string>
 #include <windows.h>
+
 using namespace std;
+
+/*
+map = the world
+screen = what you draw each frame
+hConsole = where you display the screen
+*/
 
 int nScreenWidth = 120;			// Console Screen Size X (columns)
 int nScreenHeight = 40;			// Console Screen Size Y (rows)
@@ -37,6 +44,8 @@ int main() {
 	map += L"#..............#";
 	map += L"################";
 
+
+  // Create Screen Buffer
   wchar_t* screen = new wchar_t[nScreenWidth * nScreenHeight];
   HANDLE hConsole = CreateConsoleScreenBuffer(
     GENERIC_READ | GENERIC_WRITE,
