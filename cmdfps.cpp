@@ -55,9 +55,24 @@ int main() {
     NULL
 );
 
-SetConsoleActiveScreenBuffer(hConsole);
+  SetConsoleActiveScreenBuffer(hConsole);
 
-DWORD dwBytesWritten = 0;
+  DWORD dwBytesWritten = 0;
+
+  swprintf_s(screen, 40, L"Hello Raycaster!");
+
+  // Write Screen Buffer to Console
+  WriteConsoleOutputCharacter(
+    hConsole,
+    screen,
+    nScreenWidth * nScreenHeight,
+    { 0, 0 },
+    &dwBytesWritten
+);
+
+  // Clean up
+  delete[] screen;
+  CloseHandle(hConsole);
 
   return 0;
 }
