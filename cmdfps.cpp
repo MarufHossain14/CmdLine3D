@@ -59,16 +59,27 @@ int main() {
 
   DWORD dwBytesWritten = 0;
 
-  swprintf_s(screen, 40, L"Hello Raycaster!");
+  while (true)
+  {
+      for (int i = 0; i < nScreenWidth * nScreenHeight; i++)
+          screen[i] = L' ';
 
-  // Write Screen Buffer to Console
-  WriteConsoleOutputCharacter(
-    hConsole,
-    screen,
-    nScreenWidth * nScreenHeight,
-    { 0, 0 },
-    &dwBytesWritten
-);
+      swprintf_s(screen, 40, L"Hello Raycaster!");
+
+      screen[nScreenWidth * nScreenHeight - 1] = L'\0';
+
+      WriteConsoleOutputCharacter(
+          hConsole,
+          screen,
+          nScreenWidth * nScreenHeight,
+          { 0, 0 },
+          &dwBytesWritten
+      );
+  }
+
+  // Clean up
+  delete[] screen;
+  CloseHandle(hConsole);
 
   // Clean up
   delete[] screen;
