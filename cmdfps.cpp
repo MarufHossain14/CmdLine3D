@@ -72,6 +72,9 @@ int main()
             }
         }
 
+        // Draw Player
+        screen[((int)fPlayerY + 1) * nScreenWidth + (int)fPlayerX] = L'P';
+
         screen[nScreenWidth * nScreenHeight - 1] = L'\0';
 
         WriteConsoleOutputCharacter(
