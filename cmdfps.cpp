@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 #include <windows.h>
+#include <math.h>
 
 using namespace std;
 
@@ -58,6 +59,19 @@ int main()
 
     while (true)
     {
+      // Movement Controls
+      if (GetAsyncKeyState((unsigned short)'A') & 0x8000)
+      fPlayerX -= 0.1f;
+
+      if (GetAsyncKeyState((unsigned short)'D') & 0x8000)
+      fPlayerX += 0.1f;
+
+
+      if (GetAsyncKeyState((unsigned short)'W') & 0x8000)
+      fPlayerY -= 0.1f;
+
+      if (GetAsyncKeyState((unsigned short)'S') & 0x8000)
+      fPlayerY += 0.1f;
         for (int i = 0; i < nScreenWidth * nScreenHeight; i++)
             screen[i] = L' ';
 
