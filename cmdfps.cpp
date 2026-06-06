@@ -1,7 +1,7 @@
 #include <iostream>
 #include <string>
 #include <windows.h>
-#include <math.h>
+#include <cmath>
 
 using namespace std;
 
@@ -22,6 +22,12 @@ float fPlayerA = 0.0f;
 float fFOV = 3.14159f / 4.0f;
 float fDepth = 16.0f;
 float fSpeed = 5.0f;
+
+void ClearScreen(wchar_t* screen)
+{
+    for (int i = 0; i < nScreenWidth * nScreenHeight; i++)
+        screen[i] = L' ';
+}
 
 int main()
 {
@@ -59,21 +65,20 @@ int main()
 
     while (true)
     {
-      // Movement Controls
-      if (GetAsyncKeyState((unsigned short)'A') & 0x8000)
-      fPlayerX -= 0.1f;
+        // Movement Controls
+        if (GetAsyncKeyState((unsigned short)'A') & 0x8000)
+            fPlayerX -= 0.1f;
 
-      if (GetAsyncKeyState((unsigned short)'D') & 0x8000)
-      fPlayerX += 0.1f;
+        if (GetAsyncKeyState((unsigned short)'D') & 0x8000)
+            fPlayerX += 0.1f;
 
+        if (GetAsyncKeyState((unsigned short)'W') & 0x8000)
+            fPlayerY -= 0.1f;
 
-      if (GetAsyncKeyState((unsigned short)'W') & 0x8000)
-      fPlayerY -= 0.1f;
+        if (GetAsyncKeyState((unsigned short)'S') & 0x8000)
+            fPlayerY += 0.1f;
 
-      if (GetAsyncKeyState((unsigned short)'S') & 0x8000)
-      fPlayerY += 0.1f;
-        for (int i = 0; i < nScreenWidth * nScreenHeight; i++)
-            screen[i] = L' ';
+        ClearScreen(screen);
 
         swprintf_s(screen, 40, L"Hello Raycaster!");
 
