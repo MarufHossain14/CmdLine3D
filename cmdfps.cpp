@@ -29,6 +29,18 @@ void ClearScreen(wchar_t* screen)
         screen[i] = L' ';
 }
 
+void DrawMap(wchar_t* screen, const wstring& map)
+{
+    for (int x = 0; x < nMapWidth; x++)
+    {
+        for (int y = 0; y < nMapHeight; y++)
+        {
+            screen[(y + 1) * nScreenWidth + x] =
+                map[y * nMapWidth + x];
+        }
+    }
+}
+
 int main()
 {
     wstring map;
@@ -82,14 +94,7 @@ int main()
 
         swprintf_s(screen, 40, L"Hello Raycaster!");
 
-        for (int x = 0; x < nMapWidth; x++)
-        {
-            for (int y = 0; y < nMapHeight; y++)
-            {
-                screen[(y + 1) * nScreenWidth + x] =
-                    map[y * nMapWidth + x];
-            }
-        }
+        DrawMap(screen, map);
 
         // Draw Player
         screen[((int)fPlayerY + 1) * nScreenWidth + (int)fPlayerX] = L'P';
