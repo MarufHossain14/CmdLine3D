@@ -78,6 +78,13 @@ struct Target
     bool alive = true;
 };
 
+struct WeaponAnimation
+{
+    float bobPhase = 0.0f;
+    float recoilTime = 0.0f;
+    float flashTime = 0.0f;
+};
+
 // Owns the small amount of platform-specific terminal setup used by the game.
 class Terminal
 {
@@ -210,6 +217,7 @@ private:
         constexpr int red = 3;
         constexpr int yellow = 4;
         constexpr int green = 5;
+        constexpr int white = 6;
 
         if (x == kViewWidth)
             return cyan;
@@ -235,8 +243,16 @@ private:
 
         if (pixel == 'O' || pixel == 'H')
             return red;
-        if (x == kViewWidth / 2 && y == kViewTop + kViewHeight / 2)
+        const int crosshairY = kViewTop + kViewHeight / 2;
+        if (std::abs(x - kViewWidth / 2) <= 2 && std::abs(y - crosshairY) <= 1 &&
+            pixel != ' ')
             return yellow;
+        const bool insideWeapon = y >= kScreenHeight - 11 &&
+                                  std::abs(x - kViewWidth / 2) <= 10;
+        if (insideWeapon && pixel == '*')
+            return yellow;
+        if (insideWeapon && pixel != ' ' && pixel != '.' && pixel != ',' && pixel != ':')
+            return white;
         if (y >= kViewTop && (pixel == '#' || pixel == 'X' || pixel == '+' || pixel == '|'))
             return cyan;
         if (pixel == '.' || pixel == ',' || pixel == ':')
@@ -255,6 +271,7 @@ private:
         case 3: return "\x1b[91m"; // Bright red targets.
         case 4: return "\x1b[93m"; // Yellow navigation information.
         case 5: return "\x1b[92m"; // Green status and cleared targets.
+        case 6: return "\x1b[97m"; // Bright white weapon silhouette.
         default: return "\x1b[0m";
         }
     }
@@ -646,13 +663,47 @@ bool fireShot(const Player& player, std::vector<Target>& targets)
     return true;
 }
 
-void drawWeapon(std::vector<char>& screen)
+void updateWeapon(WeaponAnimation& weapon, const Player& player, float elapsed)
+{
+    const float movementSpeed = std::hypot(player.forwardSpeed, player.strafeSpeed);
+    if (movementSpeed > 0.05f)
+        weapon.bobPhase += elapsed * (5.0f + movementSpeed * 1.5f);
+    weapon.recoilTime = std::max(0.0f, weapon.recoilTime - elapsed);
+    weapon.flashTime = std::max(0.0f, weapon.flashTime - elapsed);
+}
+
+void drawWeapon(std::vector<char>& screen, const Player& player,
+                const WeaponAnimation& weapon)
 {
     const int centerX = kViewWidth / 2;
-    screen[(kViewTop + kViewHeight / 2) * kScreenWidth + centerX] = '+';
-    drawText(screen, centerX - 4, kScreenHeight - 4, "  /||\\  ");
-    drawText(screen, centerX - 4, kScreenHeight - 3, " /_||_\\ ");
-    drawText(screen, centerX - 4, kScreenHeight - 2, "|______|");
+    const int crosshairY = kViewTop + kViewHeight / 2;
+    drawText(screen, centerX - 2, crosshairY, "--+--");
+    screen[(crosshairY - 1) * kScreenWidth + centerX] = '|';
+    screen[(crosshairY + 1) * kScreenWidth + centerX] = '|';
+
+    const float movement = std::clamp(
+        std::hypot(player.forwardSpeed, player.strafeSpeed) / kMoveSpeed, 0.0f, 1.0f);
+    const int bobX = static_cast<int>(std::round(std::sin(weapon.bobPhase) * movement));
+    const int bobY = static_cast<int>(std::round(
+        (0.5f + 0.5f * std::sin(weapon.bobPhase * 2.0f)) * movement));
+    const int recoilY = weapon.recoilTime > 0.0f ?
+        static_cast<int>(std::ceil(weapon.recoilTime / 0.07f)) : 0;
+    const int gunX = centerX - 7 + bobX;
+    const int gunY = kScreenHeight - 7 - bobY - recoilY;
+
+    if (weapon.flashTime > 0.0f)
+    {
+        drawText(screen, centerX - 2 + bobX, gunY - 3, "\\ | /");
+        drawText(screen, centerX - 2 + bobX, gunY - 2, "--*--");
+    }
+
+    // A compact first-person silhouette: barrel, receiver, grip, and stock.
+    drawText(screen, gunX, gunY,     "      ||      ");
+    drawText(screen, gunX, gunY + 1, "     /==\\     ");
+    drawText(screen, gunX, gunY + 2, "  __/|  |\\__  ");
+    drawText(screen, gunX, gunY + 3, " /___|==|___\\ ");
+    drawText(screen, gunX, gunY + 4, "     |[]|     ");
+    drawText(screen, gunX, gunY + 5, "    /____\\    ");
 }
 
 std::string targetGuide(const Player& player, const std::vector<Target>& targets)
@@ -737,6 +788,7 @@ int main()
         {12.5f, 13.5f},
     };
     int shots = 0;
+    WeaponAnimation weapon;
     std::string message = "Find and hit every target";
     float messageTime = 3.0f;
     bool running = true;
@@ -752,6 +804,7 @@ int main()
         const Input input = terminal.readInput();
         running = !input.quit;
         updatePlayer(player, input, elapsed);
+        updateWeapon(weapon, player, elapsed);
         messageTime = std::max(0.0f, messageTime - elapsed);
 
         if (input.shoot)
@@ -760,13 +813,15 @@ int main()
             const bool hit = fireShot(player, targets);
             message = hit ? "HIT!" : "Miss";
             messageTime = 0.8f;
+            weapon.recoilTime = 0.14f;
+            weapon.flashTime = 0.07f;
         }
 
         std::vector<char> screen(kScreenWidth * kScreenHeight, ' ');
         const std::vector<float> depthBuffer = drawView(screen, player);
         drawTargets(screen, player, targets, depthBuffer);
         drawSidePanel(screen, player, targets);
-        drawWeapon(screen);
+        drawWeapon(screen, player, weapon);
 
         const int targetsLeft = static_cast<int>(std::count_if(
             targets.begin(), targets.end(), [](const Target& target) { return target.alive; }));

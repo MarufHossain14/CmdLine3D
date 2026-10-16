@@ -9,7 +9,8 @@ read and experiment with.
 - A shaded first-person raycast view
 - A dedicated navigation panel with a minimap and nearest-target direction
 - Color-coded walls, targets, status messages, and map markers
-- Collision-aware movement
+- Smooth acceleration, turning, strafing, and collision-aware movement
+- An animated weapon with walking motion, recoil, and muzzle flash
 - Five targets that can only be hit when a wall is not in the way
 - A crosshair, simple weapon, shot counter, and win message
 
@@ -36,7 +37,9 @@ cmake --build build --config Release
 ```
 
 The game needs an interactive terminal at least 100 columns wide and 32 rows
-tall. Windows Terminal, PowerShell, and common Linux/macOS terminals work.
+tall. Windows Terminal, PowerShell, and common Linux/macOS terminals work. On
+compatible terminals, the game uses press and release events for especially
+smooth held-key movement; older terminals receive an automatic eased fallback.
 
 ## Controls
 
