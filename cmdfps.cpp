@@ -21,6 +21,8 @@ constexpr int kScreenWidth = 100;
 constexpr int kScreenHeight = 32;
 constexpr float kMoveSpeed = 3.0f;
 constexpr float kTurnSpeed = 2.0f;
+constexpr float kFieldOfView = 3.14159265f / 3.0f;
+constexpr float kViewDepth = 16.0f;
 
 const std::vector<std::string> kMap = {
     "################",
@@ -205,14 +207,81 @@ void drawText(std::vector<char>& screen, int x, int y, const std::string& text)
     }
 }
 
-void drawMap(std::vector<char>& screen, const Player& player)
+char wallShade(float distance)
+{
+    if (distance < kViewDepth * 0.20f) return '#';
+    if (distance < kViewDepth * 0.35f) return 'O';
+    if (distance < kViewDepth * 0.55f) return 'o';
+    if (distance < kViewDepth * 0.75f) return '.';
+    return ' ';
+}
+
+void drawView(std::vector<char>& screen, const Player& player)
+{
+    constexpr float rayStep = 0.02f;
+    constexpr int viewTop = 1;
+    constexpr int viewHeight = kScreenHeight - 2;
+
+    for (int x = 0; x < kScreenWidth; ++x)
+    {
+        const float rayAngle = player.angle - kFieldOfView / 2.0f +
+            (static_cast<float>(x) / kScreenWidth) * kFieldOfView;
+        const float eyeX = std::cos(rayAngle);
+        const float eyeY = std::sin(rayAngle);
+
+        float distance = 0.0f;
+        while (distance < kViewDepth &&
+               !isWall(player.x + eyeX * distance, player.y + eyeY * distance))
+        {
+            distance += rayStep;
+        }
+
+        // Correct the curved "fish-eye" effect caused by measuring along each ray.
+        const float correctedDistance = std::max(
+            distance * std::cos(rayAngle - player.angle), 0.1f);
+        const int ceiling = std::clamp(
+            static_cast<int>(viewHeight / 2.0f - viewHeight / correctedDistance),
+            0, viewHeight - 1);
+        const int floor = viewHeight - ceiling;
+
+        for (int viewY = 0; viewY < viewHeight; ++viewY)
+        {
+            char pixel = ' ';
+            if (viewY >= ceiling && viewY <= floor && distance < kViewDepth)
+            {
+                pixel = wallShade(distance);
+            }
+            else if (viewY > floor)
+            {
+                const float closeness = static_cast<float>(viewY - viewHeight / 2) /
+                                        (viewHeight / 2.0f);
+                if (closeness > 0.75f) pixel = '=';
+                else if (closeness > 0.50f) pixel = '-';
+                else if (closeness > 0.25f) pixel = '.';
+            }
+            screen[(viewTop + viewY) * kScreenWidth + x] = pixel;
+        }
+    }
+}
+
+void drawMiniMap(std::vector<char>& screen, const Player& player)
 {
     for (int y = 0; y < static_cast<int>(kMap.size()); ++y)
-        drawText(screen, 2, y + 3, kMap[y]);
+    {
+        for (int x = 0; x < static_cast<int>(kMap[y].size()); ++x)
+        {
+            // Empty map cells are transparent so the 3D view remains visible.
+            if (kMap[y][x] == '#')
+                screen[(y + 2) * kScreenWidth + (x + 1)] = '#';
+        }
+    }
 
-    const int playerX = 2 + static_cast<int>(player.x);
-    const int playerY = 3 + static_cast<int>(player.y);
-    screen[playerY * kScreenWidth + playerX] = 'P';
+    const int playerX = 1 + static_cast<int>(player.x);
+    const int playerY = 2 + static_cast<int>(player.y);
+    const char direction = std::cos(player.angle) > 0.5f ? '>' :
+                           std::cos(player.angle) < -0.5f ? '<' :
+                           std::sin(player.angle) > 0.0f ? 'v' : '^';
+    screen[playerY * kScreenWidth + playerX] = direction;
 }
 } // namespace
 
@@ -241,8 +310,9 @@ int main()
         updatePlayer(player, input, elapsed);
 
         std::vector<char> screen(kScreenWidth * kScreenHeight, ' ');
-        drawText(screen, 2, 1, "CMDLINE3D  |  W/S move  A/D turn  X or Esc quit");
-        drawMap(screen, player);
+        drawView(screen, player);
+        drawMiniMap(screen, player);
+        drawText(screen, 1, 0, "CMDLINE3D  |  W/S move  A/D turn  X or Esc quit");
         terminal.present(screen);
 
         std::this_thread::sleep_until(frameStart + std::chrono::milliseconds(16));
