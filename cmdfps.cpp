@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -65,6 +66,9 @@ struct Player
     float x = 8.0f;
     float y = 8.0f;
     float angle = 0.0f;
+    float forwardSpeed = 0.0f;
+    float strafeSpeed = 0.0f;
+    float turnSpeed = 0.0f;
 };
 
 struct Target
@@ -108,7 +112,13 @@ public:
         }
         active_ = true;
 #endif
-        std::cout << "\x1b[2J\x1b[H\x1b[?25l" << std::flush;
+        std::cout << "\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l";
+#ifndef _WIN32
+        // Terminals supporting the Kitty protocol now report key releases.
+        // Others safely ignore this and use the timed legacy fallback below.
+        std::cout << "\x1b[>11u";
+#endif
+        std::cout << std::flush;
     }
 
     ~Terminal()
@@ -119,10 +129,11 @@ public:
 #ifdef _WIN32
         SetConsoleMode(output_, oldOutputMode_);
 #else
+        std::cout << "\x1b[<u";
         tcsetattr(STDIN_FILENO, TCSANOW, &oldTerminal_);
         fcntl(STDIN_FILENO, F_SETFL, oldFlags_);
 #endif
-        std::cout << "\x1b[?25h\x1b[0m\n" << std::flush;
+        std::cout << "\x1b[?25h\x1b[0m\x1b[?1049l" << std::flush;
     }
 
     bool isActive() const { return active_; }
@@ -142,37 +153,22 @@ public:
         shootWasDown_ = shootDown;
         input.quit = isKeyDown(VK_ESCAPE) || isKeyDown('X');
 #else
-        std::string keys;
         char key = 0;
         while (read(STDIN_FILENO, &key, 1) > 0)
-            keys.push_back(key);
+            inputBuffer_.push_back(key);
 
-        for (std::size_t i = 0; i < keys.size(); ++i)
-        {
-            // Arrow keys arrive as a three-character escape sequence.
-            if (keys[i] == 27 && i + 2 < keys.size() && keys[i + 1] == '[')
-            {
-                if (keys[i + 2] == 'D') input.turnLeft = true;
-                else if (keys[i + 2] == 'C') input.turnRight = true;
-                else if (keys[i + 2] == 'A') input.forward = true;
-                else if (keys[i + 2] == 'B') input.backward = true;
-                i += 2;
-                continue;
-            }
-
-            switch (keys[i])
-            {
-            case 'w': case 'W': input.forward = true; break;
-            case 's': case 'S': input.backward = true; break;
-            case 'a': case 'A': input.strafeLeft = true; break;
-            case 'd': case 'D': input.strafeRight = true; break;
-            case 'q': case 'Q': input.turnLeft = true; break;
-            case 'e': case 'E': input.turnRight = true; break;
-            case ' ': input.shoot = true; break;
-            case 'x': case 'X': case 27: input.quit = true; break;
-            default: break;
-            }
-        }
+        parseInputBuffer();
+        const auto now = std::chrono::steady_clock::now();
+        input.forward = forwardDown_ || now < legacyUntil_[0];
+        input.backward = backwardDown_ || now < legacyUntil_[1];
+        input.strafeLeft = strafeLeftDown_ || now < legacyUntil_[2];
+        input.strafeRight = strafeRightDown_ || now < legacyUntil_[3];
+        input.turnLeft = turnLeftDown_ || now < legacyUntil_[4];
+        input.turnRight = turnRightDown_ || now < legacyUntil_[5];
+        input.shoot = pendingShoot_;
+        input.quit = pendingQuit_;
+        pendingShoot_ = false;
+        pendingQuit_ = false;
 #endif
         return input;
     }
@@ -181,7 +177,8 @@ public:
     {
         std::string frame;
         frame.reserve((kScreenWidth + 1) * kScreenHeight + 256);
-        frame += "\x1b[H";
+        // Synchronized output prevents a half-drawn frame from flashing onscreen.
+        frame += "\x1b[?2026h\x1b[H";
         for (int y = 0; y < kScreenHeight; ++y)
         {
             int activeColor = -1;
@@ -197,8 +194,10 @@ public:
                 frame.push_back(pixel);
             }
             frame += "\x1b[0m";
-            frame.push_back('\n');
+            if (y + 1 < kScreenHeight)
+                frame.push_back('\n');
         }
+        frame += "\x1b[?2026l";
         std::cout << frame << std::flush;
     }
 
@@ -266,8 +265,140 @@ private:
     DWORD oldOutputMode_ = 0;
     bool shootWasDown_ = false;
 #else
+    void setLegacyKey(int action)
+    {
+        // Legacy terminals have no key-up event. A short grace period plus
+        // velocity easing keeps auto-repeat from producing visible jolts.
+        legacyUntil_[action] = std::chrono::steady_clock::now() +
+                               std::chrono::milliseconds(180);
+    }
+
+    void setEnhancedKey(int keyCode, bool down, bool initialPress)
+    {
+        bool* state = nullptr;
+        if (keyCode == 'w') state = &forwardDown_;
+        else if (keyCode == 's') state = &backwardDown_;
+        else if (keyCode == 'a') state = &strafeLeftDown_;
+        else if (keyCode == 'd') state = &strafeRightDown_;
+        else if (keyCode == 'q') state = &turnLeftDown_;
+        else if (keyCode == 'e') state = &turnRightDown_;
+        if (state != nullptr)
+            *state = down;
+        else if (keyCode == ' ' && initialPress)
+            pendingShoot_ = true;
+        else if ((keyCode == 'x' || keyCode == 27) && initialPress)
+            pendingQuit_ = true;
+    }
+
+    void handleLegacyKey(char key)
+    {
+        switch (key)
+        {
+        case 'w': case 'W': setLegacyKey(0); break;
+        case 's': case 'S': setLegacyKey(1); break;
+        case 'a': case 'A': setLegacyKey(2); break;
+        case 'd': case 'D': setLegacyKey(3); break;
+        case 'q': case 'Q': setLegacyKey(4); break;
+        case 'e': case 'E': setLegacyKey(5); break;
+        case ' ': pendingShoot_ = true; break;
+        case 'x': case 'X': case 27: pendingQuit_ = true; break;
+        default: break;
+        }
+    }
+
+    static int eventTypeFrom(const std::string& body)
+    {
+        const std::size_t colon = body.find(':');
+        if (colon == std::string::npos || colon + 1 >= body.size())
+            return 1;
+        return body[colon + 1] - '0';
+    }
+
+    void handleControlSequence(const std::string& sequence)
+    {
+        const char final = sequence.back();
+        const std::string body = sequence.substr(2, sequence.size() - 3);
+        const int eventType = eventTypeFrom(body);
+        const bool down = eventType != 3;
+        const bool initialPress = eventType == 1;
+
+        if (final == 'u')
+        {
+            const int keyCode = std::atoi(body.c_str());
+            setEnhancedKey(keyCode, down, initialPress);
+            return;
+        }
+
+        int action = -1;
+        if (final == 'A') action = 0;
+        else if (final == 'B') action = 1;
+        else if (final == 'D') action = 4;
+        else if (final == 'C') action = 5;
+        if (action < 0)
+            return;
+
+        if (body.find(':') != std::string::npos)
+        {
+            bool* state = action == 0 ? &forwardDown_ :
+                          action == 1 ? &backwardDown_ :
+                          action == 4 ? &turnLeftDown_ : &turnRightDown_;
+            *state = down;
+        }
+        else
+        {
+            setLegacyKey(action);
+        }
+    }
+
+    void parseInputBuffer()
+    {
+        while (!inputBuffer_.empty())
+        {
+            if (inputBuffer_[0] != 27)
+            {
+                handleLegacyKey(inputBuffer_[0]);
+                inputBuffer_.erase(0, 1);
+                continue;
+            }
+
+            if (inputBuffer_.size() == 1)
+            {
+                handleLegacyKey(27);
+                inputBuffer_.clear();
+                continue;
+            }
+            if (inputBuffer_[1] != '[')
+            {
+                handleLegacyKey(27);
+                inputBuffer_.erase(0, 1);
+                continue;
+            }
+
+            std::size_t end = 2;
+            while (end < inputBuffer_.size() &&
+                   inputBuffer_[end] != 'u' && inputBuffer_[end] != '~' &&
+                   (inputBuffer_[end] < 'A' || inputBuffer_[end] > 'D'))
+                ++end;
+            if (end == inputBuffer_.size())
+                break;
+
+            handleControlSequence(inputBuffer_.substr(0, end + 1));
+            inputBuffer_.erase(0, end + 1);
+        }
+    }
+
     termios oldTerminal_{};
     int oldFlags_ = 0;
+    std::string inputBuffer_;
+    std::array<std::chrono::steady_clock::time_point, 6> legacyUntil_{};
+    bool forwardDown_ = false;
+    bool backwardDown_ = false;
+    bool strafeLeftDown_ = false;
+    bool strafeRightDown_ = false;
+    bool turnLeftDown_ = false;
+    bool turnRightDown_ = false;
+    bool pendingShoot_ = false;
+    bool pendingQuit_ = false;
 #endif
     bool active_ = false;
 };
@@ -295,20 +426,34 @@ bool canStandAt(float x, float y)
 
 void updatePlayer(Player& player, const Input& input, float elapsed)
 {
+    float movement = (input.forward ? 1.0f : 0.0f) -
+                     (input.backward ? 1.0f : 0.0f);
+    float strafe = (input.strafeRight ? 1.0f : 0.0f) -
+                   (input.strafeLeft ? 1.0f : 0.0f);
+    const float inputLength = std::hypot(movement, strafe);
+    if (inputLength > 1.0f)
+    {
+        movement /= inputLength;
+        strafe /= inputLength;
+    }
+
     const float turn = (input.turnRight ? 1.0f : 0.0f) -
                        (input.turnLeft ? 1.0f : 0.0f);
-    player.angle += turn * kTurnSpeed * elapsed;
+    const auto ease = [elapsed](float current, float target, float response) {
+        const float blend = 1.0f - std::exp(-response * elapsed);
+        return current + (target - current) * blend;
+    };
+    player.forwardSpeed = ease(player.forwardSpeed, movement * kMoveSpeed, 9.0f);
+    player.strafeSpeed = ease(player.strafeSpeed, strafe * kStrafeSpeed, 9.0f);
+    player.turnSpeed = ease(player.turnSpeed, turn * kTurnSpeed, 11.0f);
+    player.angle += player.turnSpeed * elapsed;
 
-    const float movement = (input.forward ? 1.0f : 0.0f) -
-                           (input.backward ? 1.0f : 0.0f);
-    const float strafe = (input.strafeRight ? 1.0f : 0.0f) -
-                         (input.strafeLeft ? 1.0f : 0.0f);
     const float nextX = player.x +
-        (std::cos(player.angle) * movement * kMoveSpeed -
-         std::sin(player.angle) * strafe * kStrafeSpeed) * elapsed;
+        (std::cos(player.angle) * player.forwardSpeed -
+         std::sin(player.angle) * player.strafeSpeed) * elapsed;
     const float nextY = player.y +
-        (std::sin(player.angle) * movement * kMoveSpeed +
-         std::cos(player.angle) * strafe * kStrafeSpeed) * elapsed;
+        (std::sin(player.angle) * player.forwardSpeed +
+         std::cos(player.angle) * player.strafeSpeed) * elapsed;
 
     // Test each axis separately so the player naturally slides along walls.
     if (canStandAt(nextX, player.y))
