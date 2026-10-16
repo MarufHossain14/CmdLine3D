@@ -7,9 +7,10 @@ read and experiment with.
 ## What is in the game?
 
 - A shaded first-person raycast view
-- A dedicated navigation panel with a minimap and nearest-target direction
+- A dedicated navigation panel with a shortest path around walls
 - Color-coded walls, targets, status messages, and map markers
-- Smooth acceleration, turning, strafing, and collision-aware movement
+- Responsive movement, precise turning, strafing, and collision detection
+- Automatic fine-aim slowdown when a visible target nears the crosshair
 - An animated weapon with walking motion, recoil, and muzzle flash
 - Five targets that can only be hit when a wall is not in the way
 - A crosshair, simple weapon, shot counter, and win message
@@ -52,5 +53,7 @@ smooth held-key movement; older terminals receive an automatic eased fallback.
 | `X` or `Esc` | Quit |
 
 Aim the `+` crosshair at each red `O`/`H` target and press Space. The panel on
-the right shows the full map: `T` is a live target, `x` is a cleared target, and
-the arrow is you. The direction below the map points toward the nearest target.
+the right shows the full map: `T` is a live target, `x` is a cleared target, the
+arrow is you, and `*` marks a safe route around the walls. Follow the instruction
+below the map one step at a time. A warning appears if you walk directly into a
+wall.

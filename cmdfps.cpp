@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <queue>
 #include <string>
 #include <thread>
 #include <vector>
@@ -26,7 +27,7 @@ constexpr int kViewTop = 2;
 constexpr int kViewHeight = kScreenHeight - kViewTop - 1;
 constexpr float kMoveSpeed = 3.0f;
 constexpr float kStrafeSpeed = 2.5f;
-constexpr float kTurnSpeed = 2.0f;
+constexpr float kTurnSpeed = 1.45f;
 constexpr float kFieldOfView = 3.14159265f / 3.0f;
 constexpr float kViewDepth = 16.0f;
 
@@ -232,6 +233,7 @@ private:
             {
                 if (pixel == 'T') return red;
                 if (pixel == 'x') return green;
+                if (pixel == '*') return yellow;
                 if (pixel == '<' || pixel == '>' || pixel == '^' || pixel == 'v') return yellow;
                 if (pixel == '#') return cyan;
                 if (pixel == '.') return dim;
@@ -286,8 +288,9 @@ private:
     {
         // Legacy terminals have no key-up event. A short grace period plus
         // velocity easing keeps auto-repeat from producing visible jolts.
+        const int graceMilliseconds = action >= 4 ? 80 : 180;
         legacyUntil_[action] = std::chrono::steady_clock::now() +
-                               std::chrono::milliseconds(180);
+                               std::chrono::milliseconds(graceMilliseconds);
     }
 
     void setEnhancedKey(int keyCode, bool down, bool initialPress)
@@ -441,7 +444,7 @@ bool canStandAt(float x, float y)
            !isWall(x + playerRadius, y + playerRadius);
 }
 
-void updatePlayer(Player& player, const Input& input, float elapsed)
+void updatePlayer(Player& player, const Input& input, float elapsed, float turnScale)
 {
     float movement = (input.forward ? 1.0f : 0.0f) -
                      (input.backward ? 1.0f : 0.0f);
@@ -460,9 +463,16 @@ void updatePlayer(Player& player, const Input& input, float elapsed)
         const float blend = 1.0f - std::exp(-response * elapsed);
         return current + (target - current) * blend;
     };
-    player.forwardSpeed = ease(player.forwardSpeed, movement * kMoveSpeed, 9.0f);
-    player.strafeSpeed = ease(player.strafeSpeed, strafe * kStrafeSpeed, 9.0f);
-    player.turnSpeed = ease(player.turnSpeed, turn * kTurnSpeed, 11.0f);
+    const float forwardTarget = movement * kMoveSpeed;
+    const float strafeTarget = strafe * kStrafeSpeed;
+    player.forwardSpeed = ease(
+        player.forwardSpeed, forwardTarget, movement == 0.0f ? 22.0f : 12.0f);
+    player.strafeSpeed = ease(
+        player.strafeSpeed, strafeTarget, strafe == 0.0f ? 22.0f : 12.0f);
+
+    // Turning is direct on purpose: releasing the key must stop the crosshair
+    // immediately instead of carrying momentum past the target.
+    player.turnSpeed = turn * kTurnSpeed * turnScale;
     player.angle += player.turnSpeed * elapsed;
 
     const float nextX = player.x +
@@ -631,6 +641,25 @@ bool hasClearShot(const Player& player, const Target& target, float distance)
     return true;
 }
 
+float aimingTurnScale(const Player& player, const std::vector<Target>& targets)
+{
+    for (const Target& target : targets)
+    {
+        if (!target.alive)
+            continue;
+
+        const float distance = std::hypot(target.x - player.x, target.y - player.y);
+        const float error = std::abs(wrappedAngle(
+            std::atan2(target.y - player.y, target.x - player.x) - player.angle));
+        if (error < 0.20f && hasClearShot(player, target, distance))
+        {
+            // Gradually enter fine-aim mode as the target approaches the crosshair.
+            return 0.35f + 0.35f * (error / 0.20f);
+        }
+    }
+    return 1.0f;
+}
+
 bool fireShot(const Player& player, std::vector<Target>& targets)
 {
     Target* bestTarget = nullptr;
@@ -706,34 +735,88 @@ void drawWeapon(std::vector<char>& screen, const Player& player,
     drawText(screen, gunX, gunY + 5, "    /____\\    ");
 }
 
-std::string targetGuide(const Player& player, const std::vector<Target>& targets)
+struct GridPoint
 {
-    const Target* nearest = nullptr;
-    float nearestDistance = kViewDepth;
-    for (const Target& target : targets)
+    int x;
+    int y;
+};
+
+std::vector<GridPoint> findRoute(const Player& player, const std::vector<Target>& targets)
+{
+    const int width = static_cast<int>(kMap[0].size());
+    const int height = static_cast<int>(kMap.size());
+    const int start = static_cast<int>(player.y) * width + static_cast<int>(player.x);
+    std::vector<int> parent(width * height, -1);
+    std::queue<int> frontier;
+    parent[start] = start;
+    frontier.push(start);
+    int goal = -1;
+
+    const auto isLiveTarget = [&](int x, int y) {
+        return std::any_of(targets.begin(), targets.end(), [&](const Target& target) {
+            return target.alive && static_cast<int>(target.x) == x &&
+                   static_cast<int>(target.y) == y;
+        });
+    };
+    constexpr std::array<GridPoint, 4> directions = {
+        GridPoint{1, 0}, GridPoint{-1, 0}, GridPoint{0, 1}, GridPoint{0, -1}
+    };
+
+    while (!frontier.empty() && goal < 0)
     {
-        if (!target.alive)
-            continue;
-        const float distance = std::hypot(target.x - player.x, target.y - player.y);
-        if (distance < nearestDistance)
+        const int cell = frontier.front();
+        frontier.pop();
+        const int x = cell % width;
+        const int y = cell / width;
+        if (isLiveTarget(x, y))
         {
-            nearest = &target;
-            nearestDistance = distance;
+            goal = cell;
+            break;
+        }
+
+        for (const GridPoint direction : directions)
+        {
+            const int nextX = x + direction.x;
+            const int nextY = y + direction.y;
+            if (nextX < 0 || nextY < 0 || nextX >= width || nextY >= height ||
+                kMap[nextY][nextX] == '#')
+                continue;
+            const int next = nextY * width + nextX;
+            if (parent[next] != -1)
+                continue;
+            parent[next] = cell;
+            frontier.push(next);
         }
     }
 
-    if (nearest == nullptr)
-        return "AREA CLEAR!";
+    std::vector<GridPoint> route;
+    if (goal < 0)
+        return route;
+    for (int cell = goal; cell != start; cell = parent[cell])
+        route.push_back({cell % width, cell / width});
+    std::reverse(route.begin(), route.end());
+    return route;
+}
 
-    const float targetAngle = wrappedAngle(
-        std::atan2(nearest->y - player.y, nearest->x - player.x) - player.angle);
-    const std::string direction = std::abs(targetAngle) < 0.15f ? "AHEAD" :
-                                  targetAngle < 0.0f ? "TURN LEFT" : "TURN RIGHT";
-    return direction + "  " + std::to_string(static_cast<int>(nearestDistance + 0.5f)) + "m";
+std::string routeGuide(const Player& player, const std::vector<GridPoint>& route,
+                       bool targetsRemain)
+{
+    if (!targetsRemain)
+        return "AREA CLEAR!";
+    if (route.empty())
+        return "TARGET HERE - AIM";
+
+    const GridPoint next = route.front();
+    const float routeAngle = wrappedAngle(
+        std::atan2(next.y + 0.5f - player.y, next.x + 0.5f - player.x) - player.angle);
+    if (std::abs(routeAngle) < 0.30f)
+        return "MOVE FORWARD";
+    return routeAngle < 0.0f ? "TURN LEFT" : "TURN RIGHT";
 }
 
 void drawSidePanel(std::vector<char>& screen, const Player& player,
-                   const std::vector<Target>& targets)
+                   const std::vector<Target>& targets,
+                   const std::vector<GridPoint>& route)
 {
     for (int y = 0; y < kScreenHeight; ++y)
         screen[y * kScreenWidth + kViewWidth] = '|';
@@ -743,6 +826,9 @@ void drawSidePanel(std::vector<char>& screen, const Player& player,
     drawText(screen, kPanelX + 1, 1, "NAVIGATION");
     for (int y = 0; y < static_cast<int>(kMap.size()); ++y)
         drawText(screen, mapX, mapY + y, kMap[y]);
+
+    for (const GridPoint point : route)
+        screen[(mapY + point.y) * kScreenWidth + mapX + point.x] = '*';
 
     for (const Target& target : targets)
     {
@@ -758,8 +844,12 @@ void drawSidePanel(std::vector<char>& screen, const Player& player,
                            std::sin(player.angle) > 0.0f ? 'v' : '^';
     screen[playerY * kScreenWidth + playerX] = direction;
 
-    drawText(screen, kPanelX + 1, 20, "NEAREST TARGET");
-    drawText(screen, kPanelX + 1, 21, targetGuide(player, targets));
+    const bool targetsRemain = std::any_of(
+        targets.begin(), targets.end(), [](const Target& target) { return target.alive; });
+    drawText(screen, kPanelX + 1, 20, "ROUTE TO TARGET");
+    drawText(screen, kPanelX + 1, 21, routeGuide(player, route, targetsRemain));
+    drawText(screen, kPanelX + 1, 22,
+             std::to_string(route.size()) + " steps  * = route");
     drawText(screen, kPanelX + 1, 23, "W/S   forward/back");
     drawText(screen, kPanelX + 1, 24, "A/D   strafe");
     drawText(screen, kPanelX + 1, 25, "Q/E   turn");
@@ -803,7 +893,7 @@ int main()
 
         const Input input = terminal.readInput();
         running = !input.quit;
-        updatePlayer(player, input, elapsed);
+        updatePlayer(player, input, elapsed, aimingTurnScale(player, targets));
         updateWeapon(weapon, player, elapsed);
         messageTime = std::max(0.0f, messageTime - elapsed);
 
@@ -819,8 +909,9 @@ int main()
 
         std::vector<char> screen(kScreenWidth * kScreenHeight, ' ');
         const std::vector<float> depthBuffer = drawView(screen, player);
+        const std::vector<GridPoint> route = findRoute(player, targets);
         drawTargets(screen, player, targets, depthBuffer);
-        drawSidePanel(screen, player, targets);
+        drawSidePanel(screen, player, targets, route);
         drawWeapon(screen, player, weapon);
 
         const int targetsLeft = static_cast<int>(std::count_if(
@@ -835,6 +926,9 @@ int main()
         else if (messageTime > 0.0f)
             drawText(screen, kViewWidth / 2 - static_cast<int>(message.size()) / 2,
                      1, message);
+        else if (depthBuffer[kViewWidth / 2] < 0.85f)
+            drawText(screen, kViewWidth / 2 - 15, 1,
+                     "WALL AHEAD - BACK UP OR TURN");
         terminal.present(screen);
 
         std::this_thread::sleep_until(frameStart + std::chrono::milliseconds(16));
