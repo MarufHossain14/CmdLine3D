@@ -49,6 +49,7 @@ struct Input
     bool backward = false;
     bool turnLeft = false;
     bool turnRight = false;
+    bool shoot = false;
     bool quit = false;
 };
 
@@ -57,6 +58,13 @@ struct Player
     float x = 8.0f;
     float y = 8.0f;
     float angle = 0.0f;
+};
+
+struct Target
+{
+    float x;
+    float y;
+    bool alive = true;
 };
 
 // Owns the small amount of platform-specific terminal setup used by the game.
@@ -120,6 +128,9 @@ public:
         input.backward = isKeyDown('S');
         input.turnLeft = isKeyDown('A');
         input.turnRight = isKeyDown('D');
+        const bool shootDown = isKeyDown(VK_SPACE);
+        input.shoot = shootDown && !shootWasDown_;
+        shootWasDown_ = shootDown;
         input.quit = isKeyDown(VK_ESCAPE) || isKeyDown('X');
 #else
         char key = 0;
@@ -131,6 +142,7 @@ public:
             case 's': case 'S': input.backward = true; break;
             case 'a': case 'A': input.turnLeft = true; break;
             case 'd': case 'D': input.turnRight = true; break;
+            case ' ': input.shoot = true; break;
             case 'x': case 'X': case 27: input.quit = true; break;
             default: break;
             }
@@ -157,6 +169,7 @@ private:
     static bool isKeyDown(int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; }
     HANDLE output_ = INVALID_HANDLE_VALUE;
     DWORD oldOutputMode_ = 0;
+    bool shootWasDown_ = false;
 #else
     termios oldTerminal_{};
     int oldFlags_ = 0;
@@ -216,11 +229,12 @@ char wallShade(float distance)
     return ' ';
 }
 
-void drawView(std::vector<char>& screen, const Player& player)
+std::vector<float> drawView(std::vector<char>& screen, const Player& player)
 {
     constexpr float rayStep = 0.02f;
     constexpr int viewTop = 1;
     constexpr int viewHeight = kScreenHeight - 2;
+    std::vector<float> depthBuffer(kScreenWidth, kViewDepth);
 
     for (int x = 0; x < kScreenWidth; ++x)
     {
@@ -239,6 +253,7 @@ void drawView(std::vector<char>& screen, const Player& player)
         // Correct the curved "fish-eye" effect caused by measuring along each ray.
         const float correctedDistance = std::max(
             distance * std::cos(rayAngle - player.angle), 0.1f);
+        depthBuffer[x] = correctedDistance;
         const int ceiling = std::clamp(
             static_cast<int>(viewHeight / 2.0f - viewHeight / correctedDistance),
             0, viewHeight - 1);
@@ -262,6 +277,117 @@ void drawView(std::vector<char>& screen, const Player& player)
             screen[(viewTop + viewY) * kScreenWidth + x] = pixel;
         }
     }
+
+    return depthBuffer;
+}
+
+float wrappedAngle(float angle)
+{
+    while (angle > 3.14159265f) angle -= 2.0f * 3.14159265f;
+    while (angle < -3.14159265f) angle += 2.0f * 3.14159265f;
+    return angle;
+}
+
+void drawTargets(std::vector<char>& screen, const Player& player,
+                 const std::vector<Target>& targets,
+                 const std::vector<float>& depthBuffer)
+{
+    constexpr int viewHeight = kScreenHeight - 2;
+
+    // Draw far targets first so a closer target naturally appears in front.
+    std::vector<const Target*> visibleTargets;
+    for (const Target& target : targets)
+        if (target.alive)
+            visibleTargets.push_back(&target);
+
+    std::sort(visibleTargets.begin(), visibleTargets.end(), [&](const Target* left, const Target* right) {
+        return std::hypot(left->x - player.x, left->y - player.y) >
+               std::hypot(right->x - player.x, right->y - player.y);
+    });
+
+    for (const Target* target : visibleTargets)
+    {
+        const float offsetX = target->x - player.x;
+        const float offsetY = target->y - player.y;
+        const float distance = std::hypot(offsetX, offsetY);
+        const float angleFromPlayer = wrappedAngle(std::atan2(offsetY, offsetX) - player.angle);
+        if (std::abs(angleFromPlayer) > kFieldOfView * 0.6f || distance < 0.2f)
+            continue;
+
+        const float projectedDepth = distance * std::cos(angleFromPlayer);
+        const int centerX = static_cast<int>(
+            (angleFromPlayer / kFieldOfView + 0.5f) * kScreenWidth);
+        const int spriteHeight = std::clamp(
+            static_cast<int>(viewHeight / projectedDepth), 2, viewHeight);
+        const int spriteWidth = std::max(1, spriteHeight / 3);
+        const int top = 1 + viewHeight / 2 - spriteHeight / 2;
+        const int bottom = top + spriteHeight;
+
+        for (int x = centerX - spriteWidth / 2; x <= centerX + spriteWidth / 2; ++x)
+        {
+            if (x < 0 || x >= kScreenWidth || projectedDepth >= depthBuffer[x])
+                continue;
+
+            for (int y = top; y <= bottom; ++y)
+            {
+                if (y <= 0 || y >= kScreenHeight - 1)
+                    continue;
+                const bool isHead = y < top + spriteHeight / 3;
+                screen[y * kScreenWidth + x] = isHead ? '@' : 'M';
+            }
+        }
+    }
+}
+
+bool hasClearShot(const Player& player, const Target& target, float distance)
+{
+    const float directionX = (target.x - player.x) / distance;
+    const float directionY = (target.y - player.y) / distance;
+    for (float step = 0.1f; step < distance; step += 0.05f)
+        if (isWall(player.x + directionX * step, player.y + directionY * step))
+            return false;
+    return true;
+}
+
+bool fireShot(const Player& player, std::vector<Target>& targets)
+{
+    Target* bestTarget = nullptr;
+    float bestDistance = kViewDepth;
+
+    for (Target& target : targets)
+    {
+        if (!target.alive)
+            continue;
+
+        const float offsetX = target.x - player.x;
+        const float offsetY = target.y - player.y;
+        const float distance = std::hypot(offsetX, offsetY);
+        const float aimError = std::abs(wrappedAngle(
+            std::atan2(offsetY, offsetX) - player.angle));
+
+        // The small angular allowance makes the center crosshair the hit area.
+        if (aimError < 0.035f && distance < bestDistance &&
+            hasClearShot(player, target, distance))
+        {
+            bestTarget = &target;
+            bestDistance = distance;
+        }
+    }
+
+    if (bestTarget == nullptr)
+        return false;
+
+    bestTarget->alive = false;
+    return true;
+}
+
+void drawWeapon(std::vector<char>& screen)
+{
+    const int centerX = kScreenWidth / 2;
+    screen[(kScreenHeight / 2) * kScreenWidth + centerX] = '+';
+    drawText(screen, centerX - 4, kScreenHeight - 4, "  /||\\  ");
+    drawText(screen, centerX - 4, kScreenHeight - 3, " /_||_\\ ");
+    drawText(screen, centerX - 4, kScreenHeight - 2, "|______|");
 }
 
 void drawMiniMap(std::vector<char>& screen, const Player& player)
@@ -295,6 +421,16 @@ int main()
     }
 
     Player player;
+    std::vector<Target> targets = {
+        {12.5f, 8.5f},
+        {13.5f, 4.5f},
+        {5.5f, 3.5f},
+        {3.5f, 13.5f},
+        {12.5f, 13.5f},
+    };
+    int shots = 0;
+    std::string message = "Find and hit every target";
+    float messageTime = 3.0f;
     bool running = true;
     auto previousTime = std::chrono::steady_clock::now();
 
@@ -308,11 +444,34 @@ int main()
         const Input input = terminal.readInput();
         running = !input.quit;
         updatePlayer(player, input, elapsed);
+        messageTime = std::max(0.0f, messageTime - elapsed);
+
+        if (input.shoot)
+        {
+            ++shots;
+            const bool hit = fireShot(player, targets);
+            message = hit ? "HIT!" : "Miss";
+            messageTime = 0.8f;
+        }
 
         std::vector<char> screen(kScreenWidth * kScreenHeight, ' ');
-        drawView(screen, player);
+        const std::vector<float> depthBuffer = drawView(screen, player);
+        drawTargets(screen, player, targets, depthBuffer);
         drawMiniMap(screen, player);
-        drawText(screen, 1, 0, "CMDLINE3D  |  W/S move  A/D turn  X or Esc quit");
+        drawWeapon(screen);
+
+        const int targetsLeft = static_cast<int>(std::count_if(
+            targets.begin(), targets.end(), [](const Target& target) { return target.alive; }));
+        drawText(screen, 1, 0,
+                 "CMDLINE3D  |  W/S move  A/D turn  Space shoot  X/Esc quit");
+        drawText(screen, 1, kScreenHeight - 1,
+                 "Targets: " + std::to_string(targetsLeft) +
+                 "  Shots: " + std::to_string(shots));
+        if (targetsLeft == 0)
+            drawText(screen, kScreenWidth / 2 - 10, 2, "YOU CLEARED THE MAP!");
+        else if (messageTime > 0.0f)
+            drawText(screen, kScreenWidth / 2 - static_cast<int>(message.size()) / 2,
+                     2, message);
         terminal.present(screen);
 
         std::this_thread::sleep_until(frameStart + std::chrono::milliseconds(16));
