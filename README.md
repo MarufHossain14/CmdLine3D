@@ -7,7 +7,8 @@ read and experiment with.
 ## What is in the game?
 
 - A shaded first-person raycast view
-- A minimap with walls (`#`), targets (`t`), and the player arrow
+- A dedicated navigation panel with a minimap and nearest-target direction
+- Color-coded walls, targets, status messages, and map markers
 - Collision-aware movement
 - Five targets that can only be hit when a wall is not in the way
 - A crosshair, simple weapon, shot counter, and win message
@@ -41,10 +42,12 @@ tall. Windows Terminal, PowerShell, and common Linux/macOS terminals work.
 
 | Key | Action |
 | --- | --- |
-| `W` / `S` | Move forward / backward |
-| `A` / `D` | Turn left / right |
+| `W` / `S` or `Up` / `Down` | Move forward / backward |
+| `A` / `D` | Strafe left / right |
+| `Q` / `E` or `Left` / `Right` | Turn left / right |
 | `Space` | Shoot |
 | `X` or `Esc` | Quit |
 
-Aim the `+` crosshair at each `@`/`M` target and press Space. The minimap in the
-top-left helps you navigate around walls.
+Aim the `+` crosshair at each red `O`/`H` target and press Space. The panel on
+the right shows the full map: `T` is a live target, `x` is a cleared target, and
+the arrow is you. The direction below the map points toward the nearest target.
