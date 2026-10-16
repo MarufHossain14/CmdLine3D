@@ -390,7 +390,8 @@ void drawWeapon(std::vector<char>& screen)
     drawText(screen, centerX - 4, kScreenHeight - 2, "|______|");
 }
 
-void drawMiniMap(std::vector<char>& screen, const Player& player)
+void drawMiniMap(std::vector<char>& screen, const Player& player,
+                 const std::vector<Target>& targets)
 {
     for (int y = 0; y < static_cast<int>(kMap.size()); ++y)
     {
@@ -400,6 +401,13 @@ void drawMiniMap(std::vector<char>& screen, const Player& player)
             if (kMap[y][x] == '#')
                 screen[(y + 2) * kScreenWidth + (x + 1)] = '#';
         }
+    }
+
+    for (const Target& target : targets)
+    {
+        if (target.alive)
+            screen[(2 + static_cast<int>(target.y)) * kScreenWidth +
+                   (1 + static_cast<int>(target.x))] = 't';
     }
 
     const int playerX = 1 + static_cast<int>(player.x);
@@ -422,7 +430,7 @@ int main()
 
     Player player;
     std::vector<Target> targets = {
-        {12.5f, 8.5f},
+        {12.5f, 8.0f},
         {13.5f, 4.5f},
         {5.5f, 3.5f},
         {3.5f, 13.5f},
@@ -457,7 +465,7 @@ int main()
         std::vector<char> screen(kScreenWidth * kScreenHeight, ' ');
         const std::vector<float> depthBuffer = drawView(screen, player);
         drawTargets(screen, player, targets, depthBuffer);
-        drawMiniMap(screen, player);
+        drawMiniMap(screen, player, targets);
         drawWeapon(screen);
 
         const int targetsLeft = static_cast<int>(std::count_if(
